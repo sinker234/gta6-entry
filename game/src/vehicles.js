@@ -17,6 +17,9 @@ export function carSpeed(car) { return Math.hypot(car.vx, car.vy); }
 
 // Player / generic arcade driving. input: {throttle -1..1, steer -1..1, handbrake}
 export function driveCar(car, input, dt, city, fx, audio) {
+  // Wrecked cars can't accelerate: throttle dies, steering goes mushy, the
+  // car coasts to a stop instead of driving around like nothing happened.
+  if (car.wrecked) input = { throttle: 0, steer: input.steer * 0.4, handbrake: false };
   const fwdX = Math.cos(car.angle), fwdY = Math.sin(car.angle);
   const fwdSpeed = car.vx * fwdX + car.vy * fwdY;
   const accel = input.throttle > 0 ? car.spec.accel : car.spec.accel * 0.6;
@@ -63,10 +66,19 @@ export class TrafficCar {
   pickTarget() {
     const { v, h } = this.city.roadCenterlines();
     const c = this.car;
-    // Head to a random point on a nearby centreline.
-    const useV = Math.random() < 0.5;
-    const tx = useV ? v[Math.floor(Math.random() * v.length)] : c.x + (Math.random() - 0.5) * 900;
-    const ty = useV ? c.y + (Math.random() - 0.5) * 900 : h[Math.floor(Math.random() * h.length)];
+    // (Round 3) Stay on the road grid: 70% of the time pick a point on the
+    // same centreline the car is already on (only one axis changes), so the
+    // car drives along roads to the next intersection instead of bee-lining
+    // through buildings. The rest of the time pick any intersection.
+    const nearestV = v.reduce((a, b) => Math.abs(b - c.x) < Math.abs(a - c.x) ? b : a, v[0]);
+    const nearestH = h.reduce((a, b) => Math.abs(b - c.y) < Math.abs(a - c.y) ? b : a, h[0]);
+    let tx, ty;
+    if (Math.random() < 0.7) {
+      if (Math.random() < 0.5) { tx = nearestV; ty = c.y + (Math.random() - 0.5) * 900; }
+      else { tx = c.x + (Math.random() - 0.5) * 900; ty = nearestH; }
+    } else {
+      tx = v[Math.floor(Math.random() * v.length)]; ty = h[Math.floor(Math.random() * h.length)];
+    }
     this.target = { x: Math.max(60, Math.min(3800, tx)), y: Math.max(60, Math.min(3000, ty)) };
   }
   update(dt, obstacles, fx, audio) {
@@ -111,6 +123,6 @@ export function drawCar(ctx, car, time) {
   ctx.restore();
   if (car.hp < 100 && !car.wrecked) { // damage bar
     ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(car.x - 22, car.y - 26, 44, 5);
-    ctx.fillStyle = car.hp > 40 ? '#7cff4f' : '#ff5252'; ctx.fillRect(car.x - 21, car.y - 25, 42 * (car.hp / car.spec.hp), 3);
+    ctx.fillStyle = car.hp > 40 ? '#7cff4f' : '#ff5252'; ctx.fillRect(car.x - 21, car.y - 25, 42 * Math.max(0, car.hp / car.spec.hp), 3);
   }
 }

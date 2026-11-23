@@ -1,5 +1,10 @@
 // Wanted system and police AI: heat builds from witnessed crimes, decays
 // when unobserved, and cruisers chase, ram and try to bust the player.
+//
+// Round 3 rewrite: police no longer bee-line through buildings. They chase
+// along the road grid — first to the nearest intersection, then along the
+// centreline that shares an axis with the player — and a stuck timer breaks
+// them out if they grind against a wall.
 import { clamp, dist } from './random.js';
 import { makeCar, driveCar, carSpeed } from './vehicles.js';
 
@@ -15,19 +20,50 @@ export class Wanted {
 }
 
 export class PoliceCar {
-  constructor(car) { this.car = car; }
+  constructor(car) { this.car = car; this.waypoint = null; this.stuck = 0; this.reverseT = 0; }
+  // Pick the next road waypoint on the way to the target: if the player is on
+  // (or near) the same vertical or horizontal centreline, drive straight at
+  // them along it; otherwise head for the nearest intersection first, then
+  // re-evaluate from there.
+  pickWaypoint(target, city) {
+    const { v, h } = city.roadCenterlines();
+    const c = this.car;
+    const nearestV = v.reduce((a, b) => Math.abs(b - c.x) < Math.abs(a - c.x) ? b : a, v[0]);
+    const nearestH = h.reduce((a, b) => Math.abs(b - c.y) < Math.abs(a - c.y) ? b : a, h[0]);
+    if (Math.abs(target.x - nearestV) < 72) return { x: nearestV, y: target.y };
+    if (Math.abs(target.y - nearestH) < 72) return { x: target.x, y: nearestH };
+    // Neither axis lines up: go to the nearest intersection, which sits on
+    // both a vertical and a horizontal road, then pick again from there.
+    return { x: nearestV, y: nearestH };
+  }
   update(dt, target, city, fx, audio) {
     const c = this.car;
     if (c.wrecked) return;
+    // Stuck detection: a wall right ahead while trying to move.
+    const aheadX = c.x + Math.cos(c.angle) * 62, aheadY = c.y + Math.sin(c.angle) * 62;
+    if (city.blocked(aheadX, aheadY, 6) && carSpeed(c) < 40) this.stuck += dt;
+    else this.stuck = 0;
+    if (this.stuck > 2) {
+      // Break out: back up briefly, then retarget via the nearest intersection.
+      this.reverseT = 0.8; this.stuck = 0; this.waypoint = null;
+    }
+    if (!this.waypoint || dist(c.x, c.y, this.waypoint.x, this.waypoint.y) < 80) {
+      this.waypoint = this.pickWaypoint(target, city);
+    }
+    // Close in: once the player is near and roughly ahead, drop the waypoint
+    // and ram directly so the chase still feels aggressive at short range.
     const d = dist(c.x, c.y, target.x, target.y);
-    const want = Math.atan2(target.y - c.y, target.x - c.x);
+    const goal = d < 170 ? target : this.waypoint;
+    const want = Math.atan2(goal.y - c.y, goal.x - c.x);
     let diff = want - c.angle;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     const steer = clamp(diff * 1.8, -1, 1);
     // Ram: full throttle until close, then match pace alongside the target.
-    const throttle = d > 70 ? 1 : 0.55;
-    driveCar(c, { throttle, steer, handbrake: Math.abs(diff) > 2.2 }, dt, city, fx, audio);
+    let throttle = d > 70 ? 1 : 0.55;
+    let handbrake = Math.abs(diff) > 2.2;
+    if (this.reverseT > 0) { this.reverseT -= dt; throttle = -0.8; handbrake = false; }
+    driveCar(c, { throttle, steer, handbrake }, dt, city, fx, audio);
   }
 }
 

@@ -44,7 +44,7 @@ export class City {
     this.policeStation = { x: 3.5 * TILE, y: 30 * TILE };
     this.hospital = { x: 30 * TILE, y: 58 * TILE };
     this.shineShop = { x: 38 * TILE, y: 26 * TILE };
-    this.hideout = { x: 8 * TILE, y: 8 * TILE };
+    this.hideout = { x: 8 * TILE, y: 13 * TILE }; // (384,624), on the east-west road — was (384,384), inside a building
     this.canvas = this.renderStatic(rng);
   }
 

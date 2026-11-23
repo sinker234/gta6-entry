@@ -152,7 +152,7 @@ export class Game {
       if (this.deathT > 1.4 && (inp.wasPressed('Enter') || inp.wasPressed('Space') || inp.wasPressed('Click'))) this.dismissEndCard();
       return;
     }
-    if (inp.wasPressed('Escape') || inp.wasPressed('KeyP')) { this.state = this.state === 'paused' ? 'playing' : 'paused'; return; }
+    if (inp.wasPressed('Escape') || inp.wasPressed('KeyP')) { this.state = this.state === 'paused' ? 'playing' : 'paused'; if (this.state === 'paused') { if (this.audio.engineGain) this.audio.engineGain.gain.value = 0; if (this.audio.sirenGain) this.audio.sirenGain.gain.value = 0; } return; }
     if (this.state === 'paused') return;
     this.audio.ensure();
     this.updatePlay(dt);
@@ -168,7 +168,7 @@ export class Game {
     if (Math.abs(inp.mouse.x - cx) < 150) {
       if (my > this.view.h * 0.52 && my < this.view.h * 0.52 + 40) this.titleSel = 0;
       else if (my > this.view.h * 0.52 + 48 && my < this.view.h * 0.52 + 88) this.titleSel = 1;
-      else if (my > this.view.h * 0.52 + 96 && my < this.view.h * 0.52 + 136) this.titleSel = 2;
+      else if (this.hasExistingSave && my > this.view.h * 0.52 + 96 && my < this.view.h * 0.52 + 136) this.titleSel = 2;
     }
     if (inp.wasPressed('Enter') || inp.wasPressed('Click')) {
       this.audio.ensure();
@@ -234,7 +234,8 @@ export class Game {
     const result = this.missions.update(dt);
     if (result === 'passed' || result === 'side-done') this.missions.finishPassed();
     else if (result === 'failed') { this.missions.fail(); this.refreshMarkers(); }
-    if (this.missions.current() && this.missions.active?.id === 'heat-escape') this.setHeatForStars(3);
+    // (Round 3) Heat Escape's 3 stars are set once in startStory; no per-frame
+    // top-up here, so the heat can actually decay while fleeing.
     // --- Shine Shop ---
     if (p.inCar && dist(p.inCar.x, p.inCar.y, city.shineShop.x, city.shineShop.y) < 58) {
       if (this.wanted.stars > 0 || p.inCar.hp < p.inCar.spec.hp) {
@@ -281,24 +282,27 @@ export class Game {
         this.bullets.push({ x: p.x + Math.cos(a) * 18, y: p.y + Math.sin(a) * 18, vx: Math.cos(a) * 780, vy: Math.sin(a) * 780, life: 0.55 });
         this.fx.muzzle(p.x, p.y, a); this.audio.gunshot(); this.fx.addShake(1.2);
         this.crime(16, p.x, p.y);
-        // Bullet vs peds/cars resolved instantly along a short ray for feel.
-        for (const ped of this.peds) if (!ped.dead && dist(ped.x, ped.y, p.x + Math.cos(a) * 60, p.y + Math.sin(a) * 60) < 42) { ped.dead = true; this.crime(30, ped.x, ped.y); this.fx.burst(ped.x, ped.y, '#e33e5a', 10); }
+        // (Round 3) No instant ray here: flying bullets in updateCollisions
+        // are the only hit check, so one shot can't kill twice or shoot through walls.
       } else {
         p.punchCd = 0.32; this.audio.punch();
         for (const ped of this.peds) if (!ped.dead && dist(ped.x, ped.y, p.x, p.y) < 34) { ped.scare(p.x, p.y); ped.x += Math.cos(p.angle) * 14; ped.y += Math.sin(p.angle) * 14; this.crime(8, p.x, p.y); this.fx.burst(ped.x, ped.y, '#ffd34d', 5); }
         for (const car of this.cars) if (dist(car.x, car.y, p.x, p.y) < 44) { damageCar(car, 4, this.fx); this.crime(6, p.x, p.y); }
       }
     }
-    // Enter nearest car.
+    // Enter nearest car (wrecked cars are not enterable — skip them so a good
+    // car parked nearby can still be selected).
     let nearest = null, nd = 58;
-    for (const car of this.cars) { const d = dist(car.x, car.y, p.x, p.y); if (d < nd) { nd = d; nearest = car; } }
+    for (const car of this.cars) { if (car.wrecked) continue; const d = dist(car.x, car.y, p.x, p.y); if (d < nd) { nd = d; nearest = car; } }
     if (nearest) {
       this.prompt = nearest.wrecked ? 'This car is wrecked' : `Press E — ${nearest.driver === 'traffic' ? 'Steal' : 'Enter'} ${nearest.type}`;
       if (inp.wasPressed('KeyE') && !nearest.wrecked) {
         const wasTraffic = nearest.driver === 'traffic';
         if (wasTraffic) {
-          // Driver ejects and flees.
-          const driver = this.peds[0];
+          // Driver ejects and flees — the nearest living pedestrian within
+          // 80px; if nobody is close, no driver appears (no corpse teleport).
+          let driver = null, dd = 80;
+          for (const ped of this.peds) { const d = dist(ped.x, ped.y, nearest.x, nearest.y); if (!ped.dead && d < dd) { dd = d; driver = ped; } }
           if (driver) { driver.x = nearest.x + 30; driver.y = nearest.y + 10; driver.scare(nearest.x, nearest.y); }
           this.crime(14, nearest.x, nearest.y);
           this.toast('Driver fled! The car is yours.', 2.5);
@@ -339,8 +343,9 @@ export class Game {
   updatePolice(dt) {
     const stars = this.wanted.stars, focus = this.focusPos();
     const want = desiredPolice(stars);
-    // Despawn when heat is gone.
-    if (stars === 0) { this.police = this.police.filter((c) => dist(c.car.x, c.car.y, focus.x, focus.y) < 700); for (const c of this.police) c.car.driver = 'traffic'; if (this.police.length) { for (const c of this.police) if (!this.cars.includes(c.car)) this.cars.push(c.car); this.police = []; } return; }
+    // Despawn when heat is gone: remove the cruisers from the world entirely,
+    // so no frozen "traffic" car — and no free stealable police car — is left behind.
+    if (stars === 0) { for (const c of this.police) { this.cars = this.cars.filter((car) => car !== c.car); this.traffic = this.traffic.filter((t) => t.car !== c.car); } this.police = []; return; }
     if (this.police.length < want && Math.random() < dt * 1.6) {
       const cop = spawnPolice(this.city, focus, this.rng, this.police);
       if (cop) { this.police.push(cop); if (!this.cars.includes(cop.car)) this.cars.push(cop.car); }
@@ -384,6 +389,18 @@ export class Game {
         }
       }
     }
+    // Cars vs the on-foot player: fast cars hurt and knock the player back,
+    // slow cars just shove. (Round 3 — traffic used to drive straight through.)
+    if (!p.inCar) for (const car of this.cars) {
+      const sp = carSpeed(car);
+      if (sp < 25) continue;
+      if (dist(p.x, p.y, car.x, car.y) < 30) {
+        const a = Math.atan2(p.y - car.y, p.x - car.x);
+        p.x += Math.cos(a) * 26; p.y += Math.sin(a) * 26;
+        this.city.resolveCircle(p, 11);
+        if (sp > 60) { p.health -= 8; this.fx.addShake(4); this.audio.crash(false); if (car.driver === 'police') this.crime(0, p.x, p.y); }
+      }
+    }
     // Police ramming hurts the player a little.
     if (p.inCar) for (const cop of this.police) if (dist(cop.car.x, cop.car.y, p.inCar.x, p.inCar.y) < 42 && carSpeed(cop.car) > 150) { /* handled by car-car */ }
     // Bullets vs cars.
@@ -399,7 +416,7 @@ export class Game {
         }
       }
     }
-    for (const b of this.bullets) for (const car of this.cars) if (dist(b.x, b.y, car.x, car.y) < 26) { damageCar(car, 12, this.fx); b.life = 0; }
+    for (const b of this.bullets) { if (b.life <= 0) continue; for (const car of this.cars) if (dist(b.x, b.y, car.x, car.y) < 26) { damageCar(car, 12, this.fx); b.life = 0; break; } }
   }
 
   // ---------- drawing ----------

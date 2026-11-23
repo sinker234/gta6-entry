@@ -10,7 +10,7 @@ export class Input {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => { this.keys.clear(); this.mouse.down = false; });
     canvas.addEventListener('mousemove', (e) => { const r = canvas.getBoundingClientRect(); this.mouse.x = e.clientX - r.left; this.mouse.y = e.clientY - r.top; });
     canvas.addEventListener('mousedown', (e) => { if (e.button === 0) { this.mouse.down = true; this.pressed.add('Mouse0'); } });
     window.addEventListener('mouseup', (e) => { if (e.button === 0) this.mouse.down = false; });

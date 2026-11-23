@@ -1,6 +1,12 @@
 // Mara Voss's five-mission story chain plus repeatable side jobs.
 // A mission is a small state machine of stages; each stage has a marker the
 // player must reach (on foot or in a car), optional timer and dialogue.
+//
+// Round 3 fixes (2026-11-24): story markers moved onto roads so the chain can
+// actually complete — stage2 (900,624) and the heat-escape hideout (384,624)
+// were inside solid buildings and unreachable. Hot Wheels now requires the
+// marked car itself, taxi-loop no longer pays twice, and Heat Escape only gets
+// its 3 stars once at startStory (no per-frame top-up in game.js).
 import { dist } from './random.js';
 
 export const STORY = [
@@ -9,7 +15,7 @@ export const STORY = [
     intro: 'Mara Voss: "Kai. A package waits by the pier lockers, east beach. Bring it to my garage up north — no questions."',
     stages: [
       { text: 'Pick up the package at the beach lockers', x: 3640, y: 900, mode: 'foot' },
-      { text: 'Deliver the package to Mara\'s garage', x: 900, y: 420, mode: 'any' },
+      { text: 'Deliver the package to Mara\'s garage', x: 900, y: 624, mode: 'any' },
     ],
     done: 'Mara Voss: "Clean work. Port Azure might suit you after all."',
   },
@@ -32,7 +38,8 @@ export const STORY = [
   {
     id: 'heat-escape', title: 'Heat Escape', reward: 600, forceStars: 3,
     intro: 'Mara Voss: "Last job. The heat is already on — shake it and reach the hideout, northwest."',
-    stages: [{ text: 'Reach the hideout while the heat is on', x: 384, y: 384, mode: 'any' }],
+    // Hideout marker matches city.hideout (384,624) — keep the two in sync.
+    stages: [{ text: 'Reach the hideout while the heat is on', x: 384, y: 624, mode: 'any' }],
     done: 'Mara Voss: "You\'re one of us now, Kai. Port Azure is yours."',
   },
 ];
@@ -64,11 +71,13 @@ export class MissionManager {
     if (def.id === 'fare-game' || def.kind === 'taxi-loop') this.game.spawnTaxiPickup();
     if (def.id === 'rampage') this.game.spawnCrates(def.needCrates);
     if (def.id === 'hot-wheels') this.game.spawnMarkedSportsCar();
+    // Heat Escape gets its 3 stars exactly once here; after that the heat is
+    // allowed to decay naturally, so "shake it" is a real objective.
     if (def.forceStars) this.game.setHeatForStars(def.forceStars);
   }
   startSideJob(kind) {
     if (kind === 'taxi') { this.sideJob = { id: 'taxi-job', kind: 'taxi-loop', title: 'Taxi Job', reward: 90 }; this.faresDone = 0; this.game.spawnTaxiPickup(); this.game.toast('Side job: pick up the passenger at the gold marker.', 4); }
-    if (kind === 'delivery') { this.sideJob = { id: 'delivery-job', kind: 'delivery', title: 'Delivery', reward: 120, stages: [{ text: 'Deliver the parcel across town', x: 3300, y: 2500, mode: 'any' }] }; this.stageIndex = 0; this.game.toast('Side job: deliver the parcel to the gold marker.', 4); }
+    if (kind === 'delivery') { this.sideJob = { id: 'delivery-job', kind: 'delivery', title: 'Delivery', reward: 120, stages: [{ text: 'Deliver the parcel across town', x: 3300, y: 2440, mode: 'any' }] }; this.stageIndex = 0; this.game.toast('Side job: deliver the parcel to the gold marker.', 4); }
     if (kind === 'race') { this.sideJob = { id: 'race-job', kind: 'race', title: 'Checkpoint Race', reward: 150, timer: 60, stages: [{ text: 'Hit the checkpoint before time runs out', x: 2900, y: 500, mode: 'car' }] }; this.stageIndex = 0; this.timer = 60; this.game.toast('Side job: checkpoint race — 60 seconds, must be driving!', 4); }
   }
   current() { return this.active ?? this.sideJob; }
@@ -94,7 +103,8 @@ export class MissionManager {
     const stage = m.stages?.[this.stageIndex]; if (!stage) return 'active';
     if (stage.mode === 'car' && !p.inCar) return 'active';
     if (stage.mode === 'foot' && p.inCar) return 'active';
-    if (stage.needCarType && p.inCar?.type !== stage.needCarType && !g.markedCarDelivered) return 'active';
+    // Hot Wheels: only the marked car counts — any other sports car is not enough.
+    if (stage.needCarType && p.inCar !== g.markedCar && !g.markedCarDelivered) return 'active';
     if (dist(px, py, stage.x, stage.y) < 62) {
       this.stageIndex++;
       if (this.stageIndex >= m.stages.length) return m.kind === 'story' ? 'passed' : 'side-done';
@@ -106,7 +116,9 @@ export class MissionManager {
   finishPassed() {
     const m = this.active;
     if (m) { this.game.earn(m.reward, 'mission'); this.game.onMissionPassed(m); this.active = null; }
-    else if (this.sideJob) { this.game.earn(this.sideJob.reward, 'mission'); this.game.onSideJobDone(this.sideJob); this.sideJob = null; }
+    // Taxi-loop fares are paid per drop-off in update(), so finishPassed must
+    // NOT pay sideJob.reward again — that was a $90 double payment.
+    else if (this.sideJob) { if (this.sideJob.kind !== 'taxi-loop') this.game.earn(this.sideJob.reward, 'mission'); this.game.onSideJobDone(this.sideJob); this.sideJob = null; }
     this.passenger = null;
   }
   fail() {

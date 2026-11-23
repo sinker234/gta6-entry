@@ -388,6 +388,18 @@ export class Game {
     if (p.inCar) for (const cop of this.police) if (dist(cop.car.x, cop.car.y, p.inCar.x, p.inCar.y) < 42 && carSpeed(cop.car) > 150) { /* handled by car-car */ }
     // Bullets vs cars.
     for (const b of this.bullets) for (const car of this.cars) if (dist(b.x, b.y, car.x, car.y) < 26) { damageCar(car, 12, this.fx); b.life = 0; }
+    // Bullets vs peds.
+    for (const b of this.bullets) {
+      if (b.life <= 0) continue;
+      for (const ped of this.peds) {
+        if (!ped.dead && dist(b.x, b.y, ped.x, ped.y) < 14) {
+          ped.dead = true; b.life = 0;
+          this.crime(30, ped.x, ped.y);
+          this.fx.burst(ped.x, ped.y, '#e33e5a', 10);
+          break;
+        }
+      }
+    }
   }
 
   // ---------- drawing ----------
